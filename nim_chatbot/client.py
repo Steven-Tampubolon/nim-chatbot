@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Iterator
 from typing import Any
 
 import httpx
@@ -50,6 +51,54 @@ class NimClient:
                 status_code=response.status_code,
             )
         return self._extract_content(response)
+
+    def stream(self, messages: list[dict]) -> Iterator[str]:
+        payload = {
+            "model": self._settings.model,
+            "messages": messages,
+            "temperature": 0.6,
+            "max_tokens": 1024,
+            "stream": True,
+        }
+        headers = {
+            "Authorization": f"Bearer {self._settings.api_key}",
+            "Content-Type": "application/json",
+        }
+        with self._client.stream(
+            "POST",
+            f"{self._settings.base_url}/chat/completions",
+            json=payload,
+            headers=headers,
+        ) as response:
+            if not response.is_success:
+                raise ApiError(
+                    f"API NVIDIA mengembalikan status {response.status_code}",
+                    status_code=response.status_code,
+                )
+            for line in response.iter_lines():
+                data = line.strip()
+                if not data.startswith("data:"):
+                    continue
+                data = data[len("data:"):].strip()
+                if data == "[DONE]":
+                    break
+                try:
+                    body = json.loads(data)
+                except ValueError:
+                    raise ApiError(_INVALID_RESPONSE_MESSAGE) from None
+                if not isinstance(body, dict):
+                    raise ApiError(_INVALID_RESPONSE_MESSAGE)
+                choices = body.get("choices")
+                if not isinstance(choices, list):
+                    raise ApiError(_INVALID_RESPONSE_MESSAGE)
+                if not choices:
+                    continue
+                first = choices[0]
+                delta = first.get("delta") if isinstance(first, dict) else None
+                content = delta.get("content") if isinstance(delta, dict) else None
+                if not isinstance(content, str) or not content:
+                    continue
+                yield content
 
     def close(self) -> None:
         self._client.close()
