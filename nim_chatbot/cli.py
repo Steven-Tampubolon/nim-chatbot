@@ -1,8 +1,14 @@
 """Antarmuka baris perintah: loop percakapan dan perintah keluar."""
 
+import argparse
+import os
 import sys
+from dataclasses import replace
 
-from nim_chatbot.errors import ApiError, ChatbotError
+from nim_chatbot.client import NimClient
+from nim_chatbot.config import load_settings
+from nim_chatbot.errors import ApiError, ChatbotError, ConfigError
+from nim_chatbot.history import Conversation
 from nim_chatbot.storage import load_conversation, save_conversation
 
 
@@ -81,3 +87,46 @@ def chat_loop(conversation, client, input_fn=input, write_fn=_stdout_write) -> N
             continue
         conversation.add_assistant("".join(potongan))
         write_fn("\n")
+
+
+def main(
+    argv=None,
+    env=None,
+    input_fn=input,
+    write_fn=_stdout_write,
+    client_factory=NimClient,
+) -> int:
+    """Rangkai konfigurasi, klien, dan loop percakapan."""
+    if argv is None:
+        argv = sys.argv[1:]
+    if env is None:
+        env = os.environ
+
+    parser = argparse.ArgumentParser(prog="nim_chatbot")
+    parser.add_argument("--model", default=None)
+    args = parser.parse_args(argv)
+
+    try:
+        settings = load_settings(env)
+    except ConfigError as galat:
+        write_fn(f"Galat: {galat}\n")
+        return 2
+
+    if args.model is not None:
+        settings = replace(settings, model=args.model)
+
+    client = client_factory(settings)
+    try:
+        write_fn(
+            f"Chatbot NVIDIA NIM (model: {settings.model}). "
+            "Ketik /help untuk bantuan.\n"
+        )
+        chat_loop(
+            Conversation(settings.system_prompt, settings.max_history_chars),
+            client,
+            input_fn,
+            write_fn,
+        )
+    finally:
+        client.close()
+    return 0
